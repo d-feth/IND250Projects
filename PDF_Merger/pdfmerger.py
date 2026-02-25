@@ -18,6 +18,7 @@ from PyPDF2 import PdfMerger, PdfReader
 
 
 def print_usage_error_and_exit():
+    # if name not specified, terminate with exact message
     print("Error: Merge file name not specified. Usage: python pdfmerger.py filename")
     sys.exit(1)
 
@@ -37,7 +38,7 @@ def list_pdf_files(directory: str):
     pdfs.sort(key=lambda s: s.lower())
     return pdfs
 
-
+# ask user to continue (y/n) before merging, and validate input
 def prompt_continue() -> bool:
     while True:
         answer = input("Continue (y/n): ").strip().lower()
@@ -51,15 +52,15 @@ def prompt_continue() -> bool:
 def merge_pdfs(directory: str, output_pdf_path: str, pdf_files: list[str]) -> None:
     # Initialize: merger object
     merger = PdfMerger()
-
+    # Get the base name of the output file for comparison (case-insensitive)
     output_basename = os.path.basename(output_pdf_path).lower()
-
+    # add each PDF to merger, skipping any that match the output file name (case-insensitive)
     appended_any = False
     for name in pdf_files:
         # Be sure not to merge any file with the same name as the output file name
         if name.lower() == output_basename:
             continue
-
+        # Construct full path to the PDF file
         full_path = os.path.join(directory, name)
         try:
             merger.append(full_path)
@@ -68,7 +69,7 @@ def merge_pdfs(directory: str, output_pdf_path: str, pdf_files: list[str]) -> No
             merger.close()
             print(f"Error: Failed to append '{name}': {e}")
             sys.exit(1)
-
+    # If we didn't append any PDFs, it means either the output filename matched all PDFs or there were no readable PDFs
     if not appended_any:
         merger.close()
         print("Error: No PDFs were merged (only output filename matched, or no readable PDFs).")
@@ -78,20 +79,21 @@ def merge_pdfs(directory: str, output_pdf_path: str, pdf_files: list[str]) -> No
     try:
         with open(output_pdf_path, "wb") as f:
             merger.write(f)
+    # Catch OSError separately to provide a clearer error message if the output file cannot be written
     except OSError as e:
         print(f"Error: Could not write output file '{output_pdf_path}': {e}")
         sys.exit(1)
     finally:
         merger.close()
 
-
+# Bonus: extract text from merged PDF and save to .txt
 def extract_text_from_pdf(pdf_path: str, txt_path: str) -> None:
     try:
         reader = PdfReader(pdf_path)
     except Exception as e:
         print(f"Error: Could not open merged PDF for text extraction: {e}")
         sys.exit(1)
-
+    # Extract text from each page and concatenate with double newlines
     chunks = []
     for i, page in enumerate(reader.pages, start=1):
         try:
@@ -99,7 +101,7 @@ def extract_text_from_pdf(pdf_path: str, txt_path: str) -> None:
         except Exception:
             text = ""
         chunks.append(text)
-
+    # Save to .txt file
     try:
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write("\n\n".join(chunks))
@@ -112,7 +114,7 @@ def main():
     # Requirement #2: if name not specified, terminate with exact message
     if len(sys.argv) == 1:
         print_usage_error_and_exit()
-
+    # Requirement #3: parse command-line arguments
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("filename", nargs="?", help="Output base name (merged file will be filename.pdf)")
     parser.add_argument("--dir", default=".", help="Directory to scan for PDFs (default: current directory)")
@@ -122,10 +124,10 @@ def main():
         help="Bonus: extract all text from merged PDF into filename.txt",
     )
     args = parser.parse_args()
-
+    # Validate that filename is provided (even though it's optional in argparse, we require it)
     if not args.filename:
         print_usage_error_and_exit()
-
+    # Requirement #1: use filename argument to determine output PDF name
     directory = args.dir
     output_pdf = f"{args.filename}.pdf"
     output_pdf_path = os.path.join(directory, output_pdf)
