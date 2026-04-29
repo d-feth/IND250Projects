@@ -16,6 +16,7 @@ Responsibilities:
 - run kickoff countdown
 - pause game timer until first touch after kickoff
 - show result overlays
+- trigger simple procedural sound effects
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from entities.ai_car import AICar
 from entities.ball import Ball
 from entities.player_car import PlayerCar
 from systems.ai_controller import AIController
+from systems.audio_manager import AudioManager
 from systems.collision import (
     handle_ball_wall_collision,
     handle_car_ball_collision,
@@ -50,7 +52,6 @@ class Game:
         self.clock = pygame.time.Clock()
         self.running = True
 
-        # Simple high-level state machine
         self.state = "menu"   # menu, playing, paused
 
         self.player_car = PlayerCar(
@@ -66,9 +67,13 @@ class Game:
         self.ball = Ball(config.BALL_START_X, config.BALL_START_Y)
 
         self.ai_controller = AIController()
+        self.audio = AudioManager()
         self.score_system = ScoreSystem()
         self.hud = HUD()
         self.menu_ui = MenuUI()
+
+        # Used so countdown beeps fire once per visible number
+        self.last_countdown_text = ""
 
         self.reset_positions()
 
@@ -89,6 +94,7 @@ class Game:
         )
 
         self.ball.reset(config.BALL_START_X, config.BALL_START_Y)
+        self.audio.stop_all_loops()
 
     def start_new_match(self) -> None:
         """
@@ -96,12 +102,14 @@ class Game:
         """
         self.score_system.reset_match()
         self.reset_positions()
+        self.last_countdown_text = ""
         self.state = "playing"
 
     def return_to_menu(self) -> None:
         """
         Return to the title menu.
         """
+        self.audio.stop_all_loops()
         self.state = "menu"
 
     def reset_match(self) -> None:
@@ -110,6 +118,7 @@ class Game:
         """
         self.score_system.reset_match()
         self.reset_positions()
+        self.last_countdown_text = ""
         self.state = "playing"
 
     def handle_events(self) -> None:
@@ -127,6 +136,7 @@ class Game:
 
                 elif self.state == "playing":
                     if event.key == pygame.K_ESCAPE:
+                        self.audio.stop_all_loops()
                         self.state = "paused"
                     elif event.key == pygame.K_r:
                         self.reset_match()
@@ -141,29 +151,74 @@ class Game:
                     elif event.key == pygame.K_m:
                         self.return_to_menu()
 
+    def handle_countdown_sounds(self) -> None:
+        """
+        Play countdown sounds once as the visible text changes.
+        """
+        countdown_text = self.score_system.get_countdown_text()
+
+        if countdown_text != self.last_countdown_text:
+            if countdown_text in {"1", "2", "3"}:
+                self.audio.play_countdown_beep()
+            elif self.last_countdown_text in {"1", "2", "3"} and countdown_text == "":
+                # Fallback if GO text is too brief or hidden by update timing
+                self.audio.play_countdown_go()
+
+            self.last_countdown_text = countdown_text
+
+        # If the scoring system uses "GO!" as message after countdown, play it once.
+        if not self.score_system.countdown_active and self.score_system.message == "GO!":
+            if self.last_countdown_text != "GO":
+                self.audio.play_countdown_go()
+                self.last_countdown_text = "GO"
+
     def update(self, dt_seconds: float) -> None:
         """
         Update gameplay only while actively playing.
         """
+        self.audio.update()
+
         if self.state != "playing":
+            self.audio.stop_all_loops()
             return
 
         self.score_system.update_timer(dt_seconds)
 
         if self.score_system.match_over:
+            self.audio.stop_all_loops()
             return
 
         if self.score_system.countdown_active:
+            self.audio.stop_all_loops()
             self.score_system.update_kickoff_countdown(dt_seconds)
+            self.handle_countdown_sounds()
             return
 
         keys = pygame.key.get_pressed()
         player_actions = get_player1_actions(keys)
         ai_actions = self.ai_controller.get_actions(self.ai_car, self.ball)
 
+        # Engine and boost sound should mostly reflect player input/state
+        player_engine_active = player_actions["accelerate"] or player_actions["reverse"]
+        player_boost_active = (
+            player_actions["boost"]
+            and player_actions["accelerate"]
+            and self.player_car.boost_amount >= config.BOOST_MIN_TO_ACTIVATE
+        )
+
+        self.audio.set_engine_active(player_engine_active)
+        self.audio.set_boost_active(player_boost_active)
+
         self.player_car.update_from_actions(player_actions)
         self.ai_car.update_from_actions(ai_actions)
         self.ball.update()
+
+        pre_ball_vx = self.ball.vx
+        pre_ball_vy = self.ball.vy
+        pre_player_vx = self.player_car.vx
+        pre_player_vy = self.player_car.vy
+        pre_ai_vx = self.ai_car.vx
+        pre_ai_vy = self.ai_car.vy
 
         handle_ball_wall_collision(self.ball)
 
@@ -172,12 +227,36 @@ class Game:
 
         handle_car_car_collision(self.player_car, self.ai_car)
 
+        # Impact sound hooks
+        if player_touched or ai_touched:
+            ball_speed_delta = abs(self.ball.vx - pre_ball_vx) + abs(self.ball.vy - pre_ball_vy)
+            self.audio.play_impact(ball_speed_delta)
+
+        car_speed_delta = (
+            abs(self.player_car.vx - pre_player_vx)
+            + abs(self.player_car.vy - pre_player_vy)
+            + abs(self.ai_car.vx - pre_ai_vx)
+            + abs(self.ai_car.vy - pre_ai_vy)
+        )
+        if car_speed_delta > 1.4:
+            self.audio.play_impact(car_speed_delta * 0.6)
+
         if player_touched or ai_touched:
             self.score_system.notify_ball_touched_after_kickoff()
 
+        old_left = self.score_system.left_score
+        old_right = self.score_system.right_score
+
         goal_scored = self.score_system.check_goal(self.ball)
         if goal_scored is not None:
+            if (
+                self.score_system.left_score != old_left
+                or self.score_system.right_score != old_right
+            ):
+                self.audio.play_goal()
+
             self.reset_positions()
+            self.last_countdown_text = ""
 
     def draw_background_and_field(self) -> None:
         """
@@ -197,7 +276,6 @@ class Game:
 
         pygame.draw.rect(self.screen, config.FIELD_COLOR, field_rect)
 
-        # Decorative inner border
         inner_rect = field_rect.inflate(-20, -20)
         pygame.draw.rect(self.screen, (45, 125, 82), inner_rect, width=2, border_radius=10)
 
@@ -323,7 +401,6 @@ class Game:
             width=4,
         )
 
-        # Small kickoff dot
         pygame.draw.circle(
             self.screen,
             config.FIELD_LINE_COLOR,
