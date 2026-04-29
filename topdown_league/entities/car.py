@@ -14,7 +14,8 @@ Responsibilities:
 - apply friction
 - keep the car inside the arena, including recessed goal pockets
 - manage boost resource
-- draw the car as a rotated shape
+- draw the car as a more detailed top-down Octane-inspired shape
+- spawn simple boost trail puffs
 - expose a collision radius for simple physics interactions
 """
 
@@ -29,7 +30,7 @@ from utils import limit_vector
 
 class Car:
     """
-    Base car class with shared movement, boost, and drawing behavior.
+    Base car class with shared movement, boost, trail, and drawing behavior.
     """
 
     def __init__(
@@ -63,8 +64,11 @@ class Car:
         self.boost_multiplier = config.CAR_BOOST_MULTIPLIER
         self.collision_radius = config.CAR_COLLISION_RADIUS
 
-        # Boost resource
         self.boost_amount = config.BOOST_MAX
+
+        # Visual boost trail puffs
+        self.boost_puffs: list[dict[str, float]] = []
+        self.boost_spawn_timer = 0
 
     def reset(self, x: float, y: float, angle: float) -> None:
         """
@@ -76,6 +80,8 @@ class Car:
         self.vy = 0.0
         self.angle = angle
         self.boost_amount = config.BOOST_MAX
+        self.boost_puffs.clear()
+        self.boost_spawn_timer = 0
 
     def update(
         self,
@@ -87,17 +93,6 @@ class Car:
     ) -> None:
         """
         Update the car for one frame.
-
-        Steps:
-        1. steer
-        2. build forward vector
-        3. decide whether boost is really active
-        4. apply acceleration
-        5. recharge or drain boost
-        6. apply friction
-        7. limit speed
-        8. move
-        9. keep in bounds
         """
         if turn_left:
             self.angle -= self.turn_speed
@@ -141,15 +136,11 @@ class Car:
         self.y += self.vy
 
         self.keep_in_bounds()
+        self.update_boost_puffs(boost_active)
 
     def keep_in_bounds(self) -> None:
         """
         Keep the car inside the arena, including recessed goal pockets.
-
-        Important fix:
-        The car is allowed to pass through the side opening into the goal pocket.
-        Once inside the pocket, it should collide with the pocket's back wall and
-        top/bottom pocket walls rather than being treated like it hit a flat side wall.
         """
         radius = self.collision_radius
 
@@ -164,30 +155,20 @@ class Car:
         left_pocket_back = config.FIELD_MARGIN - config.GOAL_DEPTH + radius
         right_pocket_back = config.SCREEN_WIDTH - config.FIELD_MARGIN + config.GOAL_DEPTH - radius
 
-        # Car is considered in a pocket if its center has passed through the goal mouth.
         in_left_pocket = self.x < config.FIELD_MARGIN and goal_top <= self.y <= goal_bottom
         in_right_pocket = self.x > config.SCREEN_WIDTH - config.FIELD_MARGIN and goal_top <= self.y <= goal_bottom
 
-        # ----------------------------
-        # Horizontal resolution
-        # ----------------------------
         if in_left_pocket:
-            # Back wall of left pocket
             if self.x < left_pocket_back:
                 self.x = left_pocket_back
                 self.vx = 0.0
 
-            # Inner vertical line where pocket meets field should remain open while
-            # the car is inside the valid goal mouth y-range, so no snap-out here.
-
         elif in_right_pocket:
-            # Back wall of right pocket
             if self.x > right_pocket_back:
                 self.x = right_pocket_back
                 self.vx = 0.0
 
         else:
-            # Normal main-field side walls apply only when not using the goal mouth
             goal_mouth_y = goal_top <= self.y <= goal_bottom
 
             if self.x < main_left and not goal_mouth_y:
@@ -197,11 +178,7 @@ class Car:
                 self.x = main_right
                 self.vx = 0.0
 
-        # ----------------------------
-        # Vertical resolution
-        # ----------------------------
         if in_left_pocket or in_right_pocket:
-            # Inside the pocket, clamp vertically to the pocket opening height
             pocket_top = goal_top + radius
             pocket_bottom = goal_bottom - radius
 
@@ -219,59 +196,227 @@ class Car:
                 self.y = bottom_bound
                 self.vy = 0.0
 
-    def get_rotated_points(self) -> list[tuple[float, float]]:
+    def update_boost_puffs(self, boost_active: bool) -> None:
         """
-        Build a rotated polygon that represents the car.
-        """
-        local_points = [
-            (-self.width / 2, -self.height / 2),
-            (self.width / 2, -self.height / 2),
-            (self.width / 2, self.height / 2),
-            (-self.width / 2, self.height / 2),
-        ]
+        Update the boost trail puffs.
 
+        These puffs are intentionally simple:
+        - they spawn near the rear of the car
+        - they do not move after spawning
+        - they fade from orange to gray
+        - they slowly grow and disappear
+        """
+        if boost_active:
+            self.boost_spawn_timer += 1
+            if self.boost_spawn_timer >= config.BOOST_PUFF_SPAWN_INTERVAL:
+                self.boost_spawn_timer = 0
+                self.spawn_boost_puffs()
+        else:
+            self.boost_spawn_timer = 0
+
+        for puff in self.boost_puffs[:]:
+            puff["life"] -= 1
+            puff["radius"] += config.BOOST_PUFF_GROWTH
+
+            if puff["life"] <= 0:
+                self.boost_puffs.remove(puff)
+
+    def spawn_boost_puffs(self) -> None:
+        """
+        Spawn a pair of exhaust puffs from the rear of the car.
+        """
+        rear_left = self.local_to_world(-self.width * 0.18, self.height * 0.48)
+        rear_right = self.local_to_world(self.width * 0.18, self.height * 0.48)
+
+        for px, py in (rear_left, rear_right):
+            self.boost_puffs.append(
+                {
+                    "x": px,
+                    "y": py,
+                    "radius": float(config.BOOST_PUFF_RADIUS),
+                    "life": float(config.BOOST_PUFF_LIFE),
+                    "max_life": float(config.BOOST_PUFF_LIFE),
+                }
+            )
+
+    def local_to_world(self, local_x: float, local_y: float) -> tuple[float, float]:
+        """
+        Convert a point from the car's local space into world space.
+        """
         radians = math.radians(self.angle)
         cos_a = math.cos(radians)
         sin_a = math.sin(radians)
 
-        rotated_points = []
-        for px, py in local_points:
-            rx = px * cos_a - py * sin_a
-            ry = px * sin_a + py * cos_a
-            rotated_points.append((self.x + rx, self.y + ry))
+        world_x = self.x + (local_x * cos_a - local_y * sin_a)
+        world_y = self.y + (local_x * sin_a + local_y * cos_a)
+        return world_x, world_y
 
-        return rotated_points
+    def transform_points(self, local_points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        """
+        Transform a list of local-space points into world-space points.
+        """
+        return [self.local_to_world(px, py) for px, py in local_points]
 
-    def get_nose_points(self) -> list[tuple[float, float]]:
+    def draw_boost_puffs(self, surface: pygame.Surface) -> None:
         """
-        Build a small triangle on the front of the car so the player can quickly
-        tell which direction the car is facing.
+        Draw the current boost puffs.
         """
-        local_points = [
-            (0, -self.height / 2 + 4),
-            (-self.width / 4, -self.height / 6),
-            (self.width / 4, -self.height / 6),
+        for puff in self.boost_puffs:
+            life_ratio = puff["life"] / puff["max_life"]
+
+            r1, g1, b1 = config.BOOST_START_COLOR
+            r2, g2, b2 = config.BOOST_END_COLOR
+
+            color = (
+                int(r2 + (r1 - r2) * life_ratio),
+                int(g2 + (g1 - g2) * life_ratio),
+                int(b2 + (b1 - b2) * life_ratio),
+            )
+
+            alpha = int(255 * life_ratio)
+            radius = int(puff["radius"])
+
+            puff_surface = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(
+                puff_surface,
+                (*color, alpha),
+                (radius + 2, radius + 2),
+                radius,
+            )
+
+            surface.blit(
+                puff_surface,
+                (int(puff["x"] - radius - 2), int(puff["y"] - radius - 2)),
+            )
+
+    def draw_wheels(self, surface: pygame.Surface) -> None:
+        """
+        Draw four simple wheel hints near the corners of the car.
+        """
+        wheel_positions = [
+            (-self.width * 0.42, -self.height * 0.22),
+            (self.width * 0.42, -self.height * 0.22),
+            (-self.width * 0.42, self.height * 0.22),
+            (self.width * 0.42, self.height * 0.22),
         ]
 
-        radians = math.radians(self.angle)
-        cos_a = math.cos(radians)
-        sin_a = math.sin(radians)
-
-        rotated_points = []
-        for px, py in local_points:
-            rx = px * cos_a - py * sin_a
-            ry = px * sin_a + py * cos_a
-            rotated_points.append((self.x + rx, self.y + ry))
-
-        return rotated_points
+        for local_x, local_y in wheel_positions:
+            wx, wy = self.local_to_world(local_x, local_y)
+            pygame.draw.circle(surface, config.CAR_WHEEL_COLOR, (int(wx), int(wy)), 6)
+            pygame.draw.circle(surface, config.CAR_WHEEL_HUB_COLOR, (int(wx), int(wy)), 2)
 
     def draw(self, surface: pygame.Surface) -> None:
         """
-        Draw the car body and front-direction marker.
+        Draw the car with a more detailed top-down look.
+
+        Layout:
+        - body shell
+        - stripes on hood and rear deck only
+        - front windshield
+        - two side windows
+        - nose marker
         """
-        body_points = self.get_rotated_points()
-        nose_points = self.get_nose_points()
+        self.draw_boost_puffs(surface)
+        self.draw_wheels(surface)
+
+        # Outer body shape
+        body_points = self.transform_points(
+            [
+                (0, -self.height * 0.52),
+                (self.width * 0.30, -self.height * 0.44),
+                (self.width * 0.47, -self.height * 0.16),
+                (self.width * 0.47, self.height * 0.22),
+                (self.width * 0.30, self.height * 0.48),
+                (-self.width * 0.30, self.height * 0.48),
+                (-self.width * 0.47, self.height * 0.22),
+                (-self.width * 0.47, -self.height * 0.16),
+                (-self.width * 0.30, -self.height * 0.44),
+            ]
+        )
 
         pygame.draw.polygon(surface, self.body_color, body_points)
+        pygame.draw.polygon(surface, config.CAR_OUTLINE_COLOR, body_points, width=2)
+
+        # Hood stripes (front section only)
+        left_hood_stripe = self.transform_points(
+            [
+                (-self.width * 0.10, -self.height * 0.42),
+                (-self.width * 0.03, -self.height * 0.42),
+                (-self.width * 0.03, -self.height * 0.18),
+                (-self.width * 0.10, -self.height * 0.18),
+            ]
+        )
+        right_hood_stripe = self.transform_points(
+            [
+                (self.width * 0.03, -self.height * 0.42),
+                (self.width * 0.10, -self.height * 0.42),
+                (self.width * 0.10, -self.height * 0.18),
+                (self.width * 0.03, -self.height * 0.18),
+            ]
+        )
+
+        # Rear deck stripes (rear section only)
+        left_rear_stripe = self.transform_points(
+            [
+                (-self.width * 0.10, self.height * 0.14),
+                (-self.width * 0.03, self.height * 0.14),
+                (-self.width * 0.03, self.height * 0.40),
+                (-self.width * 0.10, self.height * 0.40),
+            ]
+        )
+        right_rear_stripe = self.transform_points(
+            [
+                (self.width * 0.03, self.height * 0.14),
+                (self.width * 0.10, self.height * 0.14),
+                (self.width * 0.10, self.height * 0.40),
+                (self.width * 0.03, self.height * 0.40),
+            ]
+        )
+
+        for stripe in (left_hood_stripe, right_hood_stripe, left_rear_stripe, right_rear_stripe):
+            pygame.draw.polygon(surface, config.CAR_STRIPE_COLOR, stripe)
+
+        # Front windshield
+        windshield_points = self.transform_points(
+            [
+                (-self.width * 0.22, -self.height * 0.16),
+                (self.width * 0.22, -self.height * 0.16),
+                (self.width * 0.14, -self.height * 0.02),
+                (-self.width * 0.14, -self.height * 0.02),
+            ]
+        )
+        pygame.draw.polygon(surface, config.CAR_WINDOW_COLOR, windshield_points)
+        pygame.draw.polygon(surface, config.CAR_OUTLINE_COLOR, windshield_points, width=1)
+
+        # Side windows
+        left_window_points = self.transform_points(
+            [
+                (-self.width * 0.28, -self.height * 0.02),
+                (-self.width * 0.10, -self.height * 0.02),
+                (-self.width * 0.10, self.height * 0.18),
+                (-self.width * 0.24, self.height * 0.12),
+            ]
+        )
+        right_window_points = self.transform_points(
+            [
+                (self.width * 0.10, -self.height * 0.02),
+                (self.width * 0.28, -self.height * 0.02),
+                (self.width * 0.24, self.height * 0.12),
+                (self.width * 0.10, self.height * 0.18),
+            ]
+        )
+
+        pygame.draw.polygon(surface, config.CAR_WINDOW_COLOR, left_window_points)
+        pygame.draw.polygon(surface, config.CAR_WINDOW_COLOR, right_window_points)
+        pygame.draw.polygon(surface, config.CAR_OUTLINE_COLOR, left_window_points, width=1)
+        pygame.draw.polygon(surface, config.CAR_OUTLINE_COLOR, right_window_points, width=1)
+
+        # Small hood nose marker
+        nose_points = self.transform_points(
+            [
+                (0, -self.height * 0.50),
+                (-self.width * 0.10, -self.height * 0.36),
+                (self.width * 0.10, -self.height * 0.36),
+            ]
+        )
         pygame.draw.polygon(surface, self.nose_color, nose_points)
-        pygame.draw.polygon(surface, (20, 20, 20), body_points, width=2)

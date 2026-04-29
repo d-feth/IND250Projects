@@ -44,9 +44,9 @@ class HUD:
         fill_ratio = max(0.0, min(1.0, boost_amount / config.BOOST_MAX))
         fill_width = int(bar_width * fill_ratio)
 
-        pygame.draw.rect(surface, config.BOOST_BAR_BG, (bar_x, bar_y, bar_width, bar_height))
-        pygame.draw.rect(surface, config.BOOST_BAR_FILL, (bar_x, bar_y, fill_width, bar_height))
-        pygame.draw.rect(surface, config.BOOST_BAR_BORDER, (bar_x, bar_y, bar_width, bar_height), width=2)
+        pygame.draw.rect(surface, config.BOOST_BAR_BG, (bar_x, bar_y, bar_width, bar_height), border_radius=6)
+        pygame.draw.rect(surface, config.BOOST_BAR_FILL, (bar_x, bar_y, fill_width, bar_height), border_radius=6)
+        pygame.draw.rect(surface, config.BOOST_BAR_BORDER, (bar_x, bar_y, bar_width, bar_height), width=2, border_radius=6)
 
         draw_text(
             surface,
@@ -74,6 +74,7 @@ class HUD:
         """
         Draw the current HUD state.
         """
+        # Team labels
         draw_text(
             surface,
             "PLAYER",
@@ -96,6 +97,7 @@ class HUD:
             shadow_color=config.HUD_SHADOW_COLOR,
         )
 
+        # Score
         draw_text(
             surface,
             f"{left_score}",
@@ -129,6 +131,7 @@ class HUD:
             shadow_color=config.HUD_SHADOW_COLOR,
         )
 
+        # Timer
         draw_text(
             surface,
             f"Time: {time_text}",
@@ -140,9 +143,10 @@ class HUD:
             shadow_color=config.HUD_SHADOW_COLOR,
         )
 
+        # Controls reminder
         draw_text(
             surface,
-            "Move: W/S   Turn: A/D   Boost: Shift or Space   Restart: R",
+            "ESC Pause   R Restart   W/S Drive   A/D Turn   Shift/Space Boost",
             self.small_font,
             config.HUD_TEXT_COLOR,
             20,
@@ -194,14 +198,14 @@ class HUD:
                 self.result_font,
                 config.HUD_TEXT_COLOR,
                 config.SCREEN_WIDTH // 2,
-                config.SCREEN_HEIGHT // 2 - 30,
+                config.SCREEN_HEIGHT // 2 - 40,
             )
 
             draw_centered_text(
                 surface,
-                "Press R to restart the match",
+                "Press R to restart or M for main menu",
                 self.main_font,
                 config.HUD_TEXT_COLOR,
                 config.SCREEN_WIDTH // 2,
-                config.SCREEN_HEIGHT // 2 + 40,
+                config.SCREEN_HEIGHT // 2 + 34,
             )

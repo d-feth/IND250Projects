@@ -1,11 +1,11 @@
 """
 game.py
 
-Main game controller for the refined gameplay phase.
+Main game controller for the presentation/polish phase.
 
 Responsibilities:
 - create the window and clock
-- manage the main loop
+- manage state flow between menu / playing / paused
 - handle quit and restart events
 - update player and AI cars
 - update the ball
@@ -15,7 +15,7 @@ Responsibilities:
 - reset positions after goals
 - run kickoff countdown
 - pause game timer until first touch after kickoff
-- show end-of-match result
+- show result overlays
 """
 
 from __future__ import annotations
@@ -35,11 +35,12 @@ from systems.collision import (
 from systems.input_handler import get_player1_actions
 from systems.scoring import ScoreSystem
 from ui.hud import HUD
+from ui.menu import MenuUI
 
 
 class Game:
     """
-    Main game object that manages the runtime loop.
+    Main game object that manages the runtime loop and screen states.
     """
 
     def __init__(self) -> None:
@@ -48,6 +49,9 @@ class Game:
 
         self.clock = pygame.time.Clock()
         self.running = True
+
+        # Simple high-level state machine
+        self.state = "menu"   # menu, playing, paused
 
         self.player_car = PlayerCar(
             config.PLAYER_KICKOFF_X,
@@ -64,6 +68,7 @@ class Game:
         self.ai_controller = AIController()
         self.score_system = ScoreSystem()
         self.hud = HUD()
+        self.menu_ui = MenuUI()
 
         self.reset_positions()
 
@@ -85,28 +90,64 @@ class Game:
 
         self.ball.reset(config.BALL_START_X, config.BALL_START_Y)
 
-    def reset_match(self) -> None:
+    def start_new_match(self) -> None:
         """
-        Reset the full match state and kickoff setup.
+        Start a fresh match from the menu.
         """
         self.score_system.reset_match()
         self.reset_positions()
+        self.state = "playing"
+
+    def return_to_menu(self) -> None:
+        """
+        Return to the title menu.
+        """
+        self.state = "menu"
+
+    def reset_match(self) -> None:
+        """
+        Reset the current match state and kickoff setup.
+        """
+        self.score_system.reset_match()
+        self.reset_positions()
+        self.state = "playing"
 
     def handle_events(self) -> None:
         """
-        Handle pygame events.
+        Handle pygame events based on the current screen state.
         """
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
+
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_r:
-                    self.reset_match()
+                if self.state == "menu":
+                    if event.key == pygame.K_RETURN:
+                        self.start_new_match()
+
+                elif self.state == "playing":
+                    if event.key == pygame.K_ESCAPE:
+                        self.state = "paused"
+                    elif event.key == pygame.K_r:
+                        self.reset_match()
+                    elif event.key == pygame.K_m and self.score_system.match_over:
+                        self.return_to_menu()
+
+                elif self.state == "paused":
+                    if event.key == pygame.K_ESCAPE:
+                        self.state = "playing"
+                    elif event.key == pygame.K_r:
+                        self.reset_match()
+                    elif event.key == pygame.K_m:
+                        self.return_to_menu()
 
     def update(self, dt_seconds: float) -> None:
         """
-        Update all game logic for one frame.
+        Update gameplay only while actively playing.
         """
+        if self.state != "playing":
+            return
+
         self.score_system.update_timer(dt_seconds)
 
         if self.score_system.match_over:
@@ -126,11 +167,9 @@ class Game:
 
         handle_ball_wall_collision(self.ball)
 
-        # Car-ball collisions
         player_touched = handle_car_ball_collision(self.player_car, self.ball)
         ai_touched = handle_car_ball_collision(self.ai_car, self.ball)
 
-        # Car-car collision
         handle_car_car_collision(self.player_car, self.ai_car)
 
         if player_touched or ai_touched:
@@ -140,9 +179,9 @@ class Game:
         if goal_scored is not None:
             self.reset_positions()
 
-    def draw_field(self) -> None:
+    def draw_background_and_field(self) -> None:
         """
-        Draw the top-down arena with recessed goals.
+        Draw the arena with slightly nicer presentation.
         """
         self.screen.fill(config.BACKGROUND_COLOR)
 
@@ -155,7 +194,12 @@ class Game:
             config.SCREEN_WIDTH - config.FIELD_MARGIN * 2,
             config.SCREEN_HEIGHT - config.FIELD_MARGIN * 2,
         )
+
         pygame.draw.rect(self.screen, config.FIELD_COLOR, field_rect)
+
+        # Decorative inner border
+        inner_rect = field_rect.inflate(-20, -20)
+        pygame.draw.rect(self.screen, (45, 125, 82), inner_rect, width=2, border_radius=10)
 
         left_goal_rect = pygame.Rect(
             config.FIELD_MARGIN - config.GOAL_DEPTH,
@@ -225,7 +269,6 @@ class Game:
             (config.FIELD_MARGIN - config.GOAL_DEPTH, goal_bottom),
             width=4,
         )
-
         pygame.draw.line(
             self.screen,
             config.FIELD_LINE_COLOR,
@@ -280,11 +323,19 @@ class Game:
             width=4,
         )
 
-    def draw(self) -> None:
+        # Small kickoff dot
+        pygame.draw.circle(
+            self.screen,
+            config.FIELD_LINE_COLOR,
+            (config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2),
+            6,
+        )
+
+    def draw_game_scene(self) -> None:
         """
-        Draw one full frame.
+        Draw the active match scene.
         """
-        self.draw_field()
+        self.draw_background_and_field()
         self.ball.draw(self.screen)
         self.player_car.draw(self.screen)
         self.ai_car.draw(self.screen)
@@ -300,6 +351,24 @@ class Game:
             countdown_text=self.score_system.get_countdown_text(),
             waiting_for_kickoff_touch=self.score_system.waiting_for_kickoff_touch,
         )
+
+    def draw(self) -> None:
+        """
+        Draw one full frame based on the current state.
+        """
+        if self.state == "menu":
+            self.draw_background_and_field()
+            self.menu_ui.draw_main_menu(self.screen)
+
+        elif self.state == "playing":
+            self.draw_game_scene()
+
+        elif self.state == "paused":
+            self.draw_game_scene()
+            overlay = pygame.Surface((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 120))
+            self.screen.blit(overlay, (0, 0))
+            self.menu_ui.draw_pause_menu(self.screen)
 
         pygame.display.flip()
 

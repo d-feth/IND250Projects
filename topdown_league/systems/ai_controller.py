@@ -10,6 +10,9 @@ Main goals:
 - Use the same movement system as the player
 - Be believable enough to play against
 - Stay readable for a school project
+
+This version adds specific wall and corner behavior so the AI does not
+get stuck turning in loops when the ball is trapped near boundaries.
 """
 
 from __future__ import annotations
@@ -53,6 +56,124 @@ class AIController:
         target_x, target_y = self.choose_target(ai_car, ball)
         return self.drive_toward_target(ai_car, target_x, target_y)
 
+    def choose_target(self, ai_car: AICar, ball: Ball) -> tuple[float, float]:
+        """
+        Decide where the AI wants to go.
+
+        Priority:
+        1. Corner handling
+        2. Wall handling
+        3. Defense
+        4. Normal attacking approach
+        """
+        if self.ball_in_corner(ball):
+            return self.get_corner_recovery_target(ball)
+
+        if self.ball_near_wall(ball):
+            return self.get_wall_play_target(ball)
+
+        if ball.x > config.SCREEN_WIDTH * 0.62:
+            return self.get_defensive_target(ai_car, ball)
+
+        return self.get_attack_target(ai_car, ball)
+
+    def ball_near_wall(self, ball: Ball) -> bool:
+        """
+        Return True if the ball is close to one wall but not deeply in a corner.
+        """
+        wall_buffer = 80
+
+        near_left = ball.x < config.FIELD_MARGIN + wall_buffer
+        near_right = ball.x > config.SCREEN_WIDTH - config.FIELD_MARGIN - wall_buffer
+        near_top = ball.y < config.FIELD_MARGIN + wall_buffer
+        near_bottom = ball.y > config.SCREEN_HEIGHT - config.FIELD_MARGIN - wall_buffer
+
+        count = sum([near_left, near_right, near_top, near_bottom])
+
+        # One nearby wall = wall case
+        return count == 1
+
+    def ball_in_corner(self, ball: Ball) -> bool:
+        """
+        Return True if the ball is near a top/bottom and left/right wall together.
+        """
+        corner_buffer = 95
+
+        near_left = ball.x < config.FIELD_MARGIN + corner_buffer
+        near_right = ball.x > config.SCREEN_WIDTH - config.FIELD_MARGIN - corner_buffer
+        near_top = ball.y < config.FIELD_MARGIN + corner_buffer
+        near_bottom = ball.y > config.SCREEN_HEIGHT - config.FIELD_MARGIN - corner_buffer
+
+        return (near_left or near_right) and (near_top or near_bottom)
+
+    def get_corner_recovery_target(self, ball: Ball) -> tuple[float, float]:
+        """
+        When the ball is in a corner, do not drive directly at it.
+        Instead, target a point just outside the corner so the AI can approach
+        from a better angle and avoid spinning in place.
+        """
+        offset = 110
+
+        target_x = ball.x
+        target_y = ball.y
+
+        if ball.x < config.SCREEN_WIDTH / 2:
+            target_x += offset
+        else:
+            target_x -= offset
+
+        if ball.y < config.SCREEN_HEIGHT / 2:
+            target_y += offset
+        else:
+            target_y -= offset
+
+        return target_x, target_y
+
+    def get_wall_play_target(self, ball: Ball) -> tuple[float, float]:
+        """
+        When the ball is near a wall, target a point slightly away from the wall
+        so the AI approaches from an angle instead of ramming directly into it.
+        """
+        offset = 85
+        target_x = ball.x
+        target_y = ball.y
+
+        if ball.x < config.FIELD_MARGIN + 90:
+            target_x += offset
+        elif ball.x > config.SCREEN_WIDTH - config.FIELD_MARGIN - 90:
+            target_x -= offset
+
+        if ball.y < config.FIELD_MARGIN + 90:
+            target_y += offset
+        elif ball.y > config.SCREEN_HEIGHT - config.FIELD_MARGIN - 90:
+            target_y -= offset
+
+        return target_x, target_y
+
+    def get_defensive_target(self, ai_car: AICar, ball: Ball) -> tuple[float, float]:
+        """
+        If the ball is threatening the AI's side, fall back into a defensive lane.
+        """
+        defend_y = max(
+            config.FIELD_MARGIN + ai_car.collision_radius,
+            min(config.SCREEN_HEIGHT - config.FIELD_MARGIN - ai_car.collision_radius, ball.y),
+        )
+        return config.AI_DEFEND_X, defend_y
+
+    def get_attack_target(self, ai_car: AICar, ball: Ball) -> tuple[float, float]:
+        """
+        Default attack setup:
+        approach from the AI side of the ball so the AI tends to hit leftward
+        toward the player's goal.
+        """
+        offset_x = 95
+        offset_y = (ball.y - ai_car.y) * 0.16
+
+        target_x = ball.x + offset_x
+        target_y = ball.y + offset_y
+
+        return target_x, target_y
+
     def should_enter_escape_mode(self, ai_car: AICar) -> bool:
         """
         Detect whether the AI is in a bad wall-adjacent situation where it tends
@@ -65,7 +186,6 @@ class AIController:
 
         speed = math.hypot(ai_car.vx, ai_car.vy)
 
-        # If near a wall and moving slowly, it is likely stuck trying to rotate forever.
         return (near_left or near_right or near_top or near_bottom) and speed < 1.2
 
     def choose_escape_turn_direction(self, ai_car: AICar, ball: Ball) -> int:
@@ -76,30 +196,6 @@ class AIController:
         if ball.y < ai_car.y:
             return -1
         return 1
-
-    def choose_target(self, ai_car: AICar, ball: Ball) -> tuple[float, float]:
-        """
-        Decide where the AI wants to go.
-
-        Strategy:
-        1. If the ball is deep on the AI's side, defend more directly
-        2. Otherwise, get slightly behind the ball relative to the player's goal
-        """
-        if ball.x > config.SCREEN_WIDTH * 0.62:
-            defend_y = max(
-                config.FIELD_MARGIN + ai_car.collision_radius,
-                min(config.SCREEN_HEIGHT - config.FIELD_MARGIN - ai_car.collision_radius, ball.y),
-            )
-            return config.AI_DEFEND_X, defend_y
-
-        # Attack setup: approach from the AI side of the ball so it tends to hit leftward
-        offset_x = 95
-        offset_y = (ball.y - ai_car.y) * 0.16
-
-        target_x = ball.x + offset_x
-        target_y = ball.y + offset_y
-
-        return target_x, target_y
 
     def drive_toward_target(self, ai_car: AICar, target_x: float, target_y: float) -> dict[str, bool]:
         """

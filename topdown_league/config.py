@@ -128,3 +128,31 @@ SMALL_FONT_SIZE = 20
 LARGE_FONT_SIZE = 56
 RESULT_FONT_SIZE = 72
 COUNTDOWN_FONT_SIZE = 96
+
+# ----------------------------
+# Car visual settings
+# ----------------------------
+CAR_STRIPE_COLOR = (245, 245, 245)
+CAR_WINDOW_COLOR = (85, 98, 112)
+CAR_WHEEL_COLOR = (35, 35, 35)
+CAR_WHEEL_HUB_COLOR = (100, 100, 100)
+CAR_OUTLINE_COLOR = (20, 20, 20)
+
+# ----------------------------
+# Boost trail settings
+# ----------------------------
+BOOST_START_COLOR = (255, 150, 60)
+BOOST_END_COLOR = (120, 120, 120)
+BOOST_PUFF_LIFE = 16
+BOOST_PUFF_RADIUS = 5
+BOOST_PUFF_GROWTH = 0.45
+BOOST_PUFF_SPAWN_INTERVAL = 2
+
+# ----------------------------
+# Ball visual settings
+# ----------------------------
+BALL_BASE_COLOR = (205, 205, 205)
+BALL_PATCH_COLOR = (95, 95, 95)
+BALL_HIGHLIGHT_COLOR = (245, 245, 245)
+BALL_OUTLINE_COLOR = (50, 50, 50)
+BALL_SPIN_SPEED = 5.0
