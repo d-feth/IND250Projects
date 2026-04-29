@@ -41,3 +41,6 @@ Install pygame-ce with:
 
 ```bash
 pip install -r requirements.txt
+```
+
+Launch the game by running main.py
